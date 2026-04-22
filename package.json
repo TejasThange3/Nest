@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.0",
+    "expo-gl": "^15.1.7",
+    "expo-gl-cpp": "^11.4.0",
+    "react-native-webrtc": "^124.0.6"
+  }
+}

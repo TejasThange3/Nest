@@ -1,0 +1,507 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Dimensions,
+  Platform,
+  ScrollView,
+  Modal,
+  Animated,
+} from 'react-native';
+import {
+  RTCPeerConnection,
+  RTCView,
+  mediaDevices,
+  RTCIceCandidate,
+  RTCSessionDescription,
+  MediaStream,
+} from 'react-native-webrtc';
+import io from 'socket.io-client';
+import { TypedSocket } from '../../types/socket';
+import Icon from '@expo/vector-icons/MaterialIcons';
+import { GLView } from 'expo-gl';
+import { RootStackScreenProps } from '../../types/navigation';
+
+interface AdvancedFilterEffect {
+  name: string;
+  shaderCode?: string;
+  applyShaderEffect?: (gl: any, textureUrl: string) => void;
+}
+
+const filters: { [key: string]: AdvancedFilterEffect } = {
+  sepia: {
+    name: 'Sepia',
+    shaderCode: '// Sepia shader code',
+    applyShaderEffect: (gl, textureUrl) => {
+      console.log('Applying sepia effect:', textureUrl);
+    }
+  }
+};
+
+const configuration = {
+  iceServers: [
+    {
+      urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'],
+    },
+  ],
+};
+
+type CallScreenProps = RootStackScreenProps<'Call'>;
+
+export default function CallScreen({ navigation, route }: CallScreenProps) {
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+  const [isSpeakerEnabled, setIsSpeakerEnabled] = useState(true);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [selectedFilter, setSelectedFilter] = useState<string>('none');
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterAnimation] = useState(new Animated.Value(0));
+
+  const peerConnection = useRef<RTCPeerConnection | null>(null);
+  const socket = useRef<TypedSocket | null>(null);
+
+  const { isIncoming, partnerId, partnerName, callType } = route.params;
+
+  useEffect(() => {
+    setupCallConnection();
+    return () => {
+      cleanupCall();
+    };
+  }, []);
+
+  const setupCallConnection = async () => {
+    socket.current = io('http://localhost:5000') as TypedSocket;
+    peerConnection.current = new RTCPeerConnection(configuration);
+
+    const stream = await mediaDevices.getUserMedia({
+      audio: true,
+      video: callType === 'video' ? {
+        width: 640,
+        height: 480,
+        frameRate: 30,
+        facingMode: 'user',
+      } : false,
+    });
+
+    const nativeStream = new MediaStream();
+    stream.getTracks().forEach(track => {
+      nativeStream.addTrack(track);
+    });
+    setLocalStream(nativeStream);
+
+    stream.getTracks().forEach((track) => {
+      peerConnection.current?.addTrack(track, stream);
+    });
+
+    if (peerConnection.current) {
+      (peerConnection.current as any).ontrack = (event: { streams: MediaStream[] }) => {
+        const remoteNativeStream = new MediaStream();
+        event.streams[0].getTracks().forEach(track => {
+          remoteNativeStream.addTrack(track);
+        });
+        setRemoteStream(remoteNativeStream);
+      };
+
+      (peerConnection.current as any).onicecandidate = (event: { candidate: RTCIceCandidate | null }) => {
+        if (event.candidate) {
+          socket.current?.emit('ice-candidate', {
+            candidate: event.candidate.toJSON(),
+            partnerId,
+          });
+        }
+      };
+    }
+
+    setupSocketEvents();
+
+    if (isIncoming) {
+      socket.current?.on('offer', handleOffer);
+    } else {
+      createAndSendOffer();
+    }
+  };
+
+  const setupSocketEvents = () => {
+    if (!socket.current) return;
+
+    socket.current.on('ice-candidate', async (data: { candidate: RTCIceCandidate; partnerId: string }) => {
+      try {
+        const candidate = new RTCIceCandidate(data.candidate);
+        await peerConnection.current?.addIceCandidate(candidate);
+      } catch (error) {
+        console.error('Error adding ice candidate:', error);
+      }
+    });
+
+    socket.current.on('answer', async (data: { sdp: RTCSessionDescription; partnerId: string }) => {
+      try {
+        const desc = new RTCSessionDescription(data.sdp);
+        await peerConnection.current?.setRemoteDescription(desc);
+      } catch (error) {
+        console.error('Error setting remote description:', error);
+      }
+    });
+  };
+
+  const createAndSendOffer = async () => {
+    try {
+      const offer = await peerConnection.current?.createOffer();
+      if (offer) {
+        await peerConnection.current?.setLocalDescription(offer);
+        socket.current?.emit('offer', {
+          sdp: offer,
+          partnerId,
+        });
+      }
+    } catch (error) {
+      console.error('Error creating offer:', error);
+    }
+  };
+
+  const handleOffer = async (data: { sdp: RTCSessionDescription }) => {
+    try {
+      const desc = new RTCSessionDescription(data.sdp);
+      await peerConnection.current?.setRemoteDescription(desc);
+
+      const answer = await peerConnection.current?.createAnswer();
+      if (answer) {
+        await peerConnection.current?.setLocalDescription(answer);
+        socket.current?.emit('answer', {
+          sdp: answer,
+          partnerId,
+        });
+      }
+    } catch (error) {
+      console.error('Error handling offer:', error);
+    }
+  };
+
+  const toggleMute = () => {
+    if (localStream) {
+      localStream.getAudioTracks().forEach((track) => {
+        track.enabled = !track.enabled;
+      });
+      setIsMuted(!isMuted);
+    }
+  };
+
+  const toggleVideo = () => {
+    if (localStream && callType === 'video') {
+      localStream.getVideoTracks().forEach((track) => {
+        track.enabled = !track.enabled;
+      });
+      setIsVideoEnabled(!isVideoEnabled);
+    }
+  };
+
+  const toggleSpeaker = () => {
+    setIsSpeakerEnabled(!isSpeakerEnabled);
+  };
+
+  const endCall = () => {
+    cleanupCall();
+    navigation.goBack();
+  };
+
+  const toggleScreenShare = async () => {
+    if (Platform.OS === 'web') {
+      try {
+        if (!isScreenSharing) {
+          const screenStream = await (navigator.mediaDevices as any).getDisplayMedia({
+            video: true,
+          });
+          
+          if (peerConnection.current) {
+            const sender = peerConnection.current.getSenders().find(s => 
+              s.track?.kind === 'video'
+            );
+            if (sender) {
+              sender.replaceTrack(screenStream.getVideoTracks()[0]);
+            }
+          }
+          
+          const nativeScreenStream = new MediaStream();
+          screenStream.getTracks().forEach(track => {
+            nativeScreenStream.addTrack(track);
+          });
+          setLocalStream(nativeScreenStream);
+          setIsScreenSharing(true);
+        } else {
+          const stream = await mediaDevices.getUserMedia({
+            video: true,
+            audio: true,
+          });
+          
+          if (peerConnection.current) {
+            const sender = peerConnection.current.getSenders().find(s => 
+              s.track?.kind === 'video'
+            );
+            if (sender) {
+              sender.replaceTrack(stream.getVideoTracks()[0]);
+            }
+          }
+          
+          const nativeStream = new MediaStream();
+          stream.getTracks().forEach(track => {
+            nativeStream.addTrack(track);
+          });
+          setLocalStream(nativeStream);
+          setIsScreenSharing(false);
+        }
+      } catch (error) {
+        console.error('Error toggling screen share:', error);
+      }
+    }
+  };
+
+  const applyFilter = (filterId: string) => {
+    setSelectedFilter(filterId);
+    setShowFilters(false);
+
+    Animated.timing(filterAnimation, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const renderFilters = () => (
+    <Modal
+      transparent
+      visible={showFilters}
+      animationType="slide"
+      onRequestClose={() => setShowFilters(false)}
+    >
+      <View style={styles.filterModal}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <TouchableOpacity
+            style={[styles.filterOption, selectedFilter === 'none' && styles.selectedFilter]}
+            onPress={() => applyFilter('none')}
+          >
+            <Text style={styles.filterText}>None</Text>
+          </TouchableOpacity>
+          {Object.entries(filters).map(([id, filter]) => (
+            <TouchableOpacity
+              key={id}
+              style={[styles.filterOption, selectedFilter === id && styles.selectedFilter]}
+              onPress={() => applyFilter(id)}
+            >
+              <Text style={styles.filterText}>{filter.name}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        <TouchableOpacity
+          style={styles.closeFilters}
+          onPress={() => setShowFilters(false)}
+        >
+          <Icon name="close" size={24} color="#fff" />
+        </TouchableOpacity>
+      </View>
+    </Modal>
+  );
+
+  const renderStream = (stream: MediaStream | null, isLocal: boolean) => {
+    if (!stream) return null;
+
+    return (
+      <Animated.View
+        style={[
+          isLocal ? styles.localStream : styles.remoteStream,
+          { opacity: filterAnimation },
+        ]}
+      >
+        <RTCView
+          streamURL={stream.toURL()}
+          style={StyleSheet.absoluteFill}
+          objectFit="cover"
+        />
+        {selectedFilter !== 'none' && (
+          <GLView
+            style={StyleSheet.absoluteFill}
+            onContextCreate={gl => {
+              const effect = filters[selectedFilter];
+              if (effect && effect.applyShaderEffect) {
+                effect.applyShaderEffect(gl, stream.toURL());
+              }
+            }}
+          />
+        )}
+      </Animated.View>
+    );
+  };
+
+  const cleanupCall = () => {
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+    }
+    if (peerConnection.current) {
+      peerConnection.current.close();
+    }
+    if (socket.current) {
+      (socket.current as any).disconnect();
+    }
+  };
+
+  return (
+    <View style={styles.container}>
+      {callType === 'video' && (
+        <>
+          {renderStream(remoteStream, false)}
+          {renderStream(localStream, true)}
+        </>
+      )}
+
+      <View style={styles.controls}>
+        <TouchableOpacity
+          style={[styles.controlButton, isMuted && styles.controlButtonActive]}
+          onPress={toggleMute}
+        >
+          <Icon name={isMuted ? 'mic-off' : 'mic'} size={24} color="#fff" />
+        </TouchableOpacity>
+
+        {callType === 'video' && (
+          <>
+            <TouchableOpacity
+              style={[styles.controlButton, !isVideoEnabled && styles.controlButtonActive]}
+              onPress={toggleVideo}
+            >
+              <Icon name={isVideoEnabled ? 'videocam' : 'videocam-off'} size={24} color="#fff" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.controlButton}
+              onPress={() => setShowFilters(true)}
+            >
+              <Icon name="filter" size={24} color="#fff" />
+            </TouchableOpacity>
+
+            {Platform.OS === 'web' && (
+              <TouchableOpacity
+                style={[styles.controlButton, isScreenSharing && styles.controlButtonActive]}
+                onPress={toggleScreenShare}
+              >
+                <Icon name="screen-share" size={24} color="#fff" />
+              </TouchableOpacity>
+            )}
+          </>
+        )}
+
+        <TouchableOpacity
+          style={[styles.controlButton, isSpeakerEnabled && styles.controlButtonActive]}
+          onPress={toggleSpeaker}
+        >
+          <Icon name={isSpeakerEnabled ? 'volume-up' : 'volume-down'} size={24} color="#fff" />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.controlButton, styles.endCallButton]}
+          onPress={endCall}
+        >
+          <Icon name="call-end" size={24} color="#fff" />
+        </TouchableOpacity>
+      </View>
+
+      <Text style={styles.partnerName}>{partnerName}</Text>
+      <Text style={styles.callStatus}>
+        {remoteStream ? 'Connected' : 'Connecting...'}
+      </Text>
+
+      {renderFilters()}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#1a1a1a',
+  },
+  remoteStream: {
+    flex: 1,
+    width: Dimensions.get('window').width,
+    height: Dimensions.get('window').height - 200,
+  },
+  localStream: {
+    position: 'absolute',
+    top: 20,
+    right: 20,
+    width: 120,
+    height: 180,
+    backgroundColor: '#444',
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  controls: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
+  controlButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  controlButtonActive: {
+    backgroundColor: 'rgba(255,255,255,0.4)',
+  },
+  endCallButton: {
+    backgroundColor: '#ff4444',
+  },
+  partnerName: {
+    position: 'absolute',
+    top: 40,
+    left: 20,
+    color: 'white',
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+  callStatus: {
+    position: 'absolute',
+    top: 70,
+    left: 20,
+    color: '#aaa',
+    fontSize: 16,
+  },
+  filterModal: {
+    position: 'absolute',
+    bottom: 100,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    padding: 20,
+  },
+  filterOption: {
+    padding: 10,
+    marginHorizontal: 5,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 10,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  selectedFilter: {
+    backgroundColor: 'rgba(255,255,255,0.4)',
+  },
+  filterText: {
+    color: '#fff',
+    fontSize: 14,
+  },
+  closeFilters: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    padding: 10,
+  },
+});

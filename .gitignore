@@ -1,0 +1,57 @@
+# -----------------------------
+# Dependencies
+# -----------------------------
+node_modules/
+**/node_modules/
+
+# -----------------------------
+# Environment / secrets
+# -----------------------------
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# -----------------------------
+# Build output / cache
+# -----------------------------
+dist/
+build/
+web-build/
+.expo/
+.cache/
+coverage/
+*.tsbuildinfo
+
+# -----------------------------
+# Logs / temp
+# -----------------------------
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# -----------------------------
+# OS / editor noise
+# -----------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# -----------------------------
+# Local terminal/runtime files
+# -----------------------------
+terminals/
+agent-transcripts/
+
+# -----------------------------
+# Root-only media/screenshot files
+# (Keep app assets inside mobile/assets)
+# -----------------------------
+/Screenshot *.png
+/play_store_512.png
+/nest *.jpeg
+/nest *.jpg
