@@ -21,8 +21,20 @@ const app = express();
 const server = http.createServer(app);
 
 // CORS configuration
+const normalizeOrigin = (origin: string): string => origin.trim().replace(/\/$/, '');
+const configuredOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',')
+      .map(normalizeOrigin)
+      .filter(Boolean)
+  : ['http://localhost:3000', 'http://localhost:19006'];
+
 const corsOptions = {
-  origin: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:19006'],
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    // Allow non-browser tools (no Origin header) and configured browser origins.
+    if (!origin) return callback(null, true);
+    const allowed = configuredOrigins.includes(normalizeOrigin(origin));
+    return callback(allowed ? null : new Error('Not allowed by CORS'), allowed);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
