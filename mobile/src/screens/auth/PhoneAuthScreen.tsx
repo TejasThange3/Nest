@@ -14,6 +14,8 @@ export default function PhoneAuthScreen({ navigation }: AuthStackScreenProps<'Ph
   const [verificationCode, setVerificationCode] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [statusType, setStatusType] = useState<'success' | 'error' | ''>('');
 
   const handlePhoneChange = (value: string) => {
     const onlyDigits = value.replace(/\D/g, '').slice(0, 10);
@@ -29,11 +31,15 @@ export default function PhoneAuthScreen({ navigation }: AuthStackScreenProps<'Ph
 
   const handleSendCode = async () => {
     if (phoneNumber.trim().length !== 10) {
+      setStatusType('error');
+      setStatusMessage('Please enter exactly 10 digits.');
       Alert.alert('Invalid phone number', 'Please enter exactly 10 digits.');
       return;
     }
 
     setIsLoading(true);
+    setStatusType('');
+    setStatusMessage('');
     try {
       await apiRequest<ApiResponse>('/api/auth/send-phone-code', {
         method: 'POST',
@@ -41,8 +47,12 @@ export default function PhoneAuthScreen({ navigation }: AuthStackScreenProps<'Ph
       });
 
       setIsVerifying(true);
+      setStatusType('success');
+      setStatusMessage('OTP sent successfully.');
       Alert.alert('Code sent', 'OTP was sent to your phone number.');
     } catch (error: any) {
+      setStatusType('error');
+      setStatusMessage(error.message || 'Failed to send OTP.');
       Alert.alert('Failed to send OTP', error.message);
     } finally {
       setIsLoading(false);
@@ -51,11 +61,15 @@ export default function PhoneAuthScreen({ navigation }: AuthStackScreenProps<'Ph
 
   const handleVerifyCode = async () => {
     if (!verificationCode.trim()) {
+      setStatusType('error');
+      setStatusMessage('Please enter the OTP code.');
       Alert.alert('OTP required', 'Please enter the verification code.');
       return;
     }
 
     setIsLoading(true);
+    setStatusType('');
+    setStatusMessage('');
     try {
       await apiRequest<ApiResponse>('/api/auth/verify-phone', {
         method: 'POST',
@@ -69,6 +83,8 @@ export default function PhoneAuthScreen({ navigation }: AuthStackScreenProps<'Ph
         phoneNumber: getFormattedPhoneNumber(),
       });
     } catch (error: any) {
+      setStatusType('error');
+      setStatusMessage(error.message || 'Phone verification failed.');
       Alert.alert('Phone verification failed', error.message);
     } finally {
       setIsLoading(false);
@@ -98,6 +114,11 @@ export default function PhoneAuthScreen({ navigation }: AuthStackScreenProps<'Ph
           <TouchableOpacity style={styles.button} onPress={handleSendCode}>
             <Text style={styles.buttonText}>{isLoading ? 'Sending...' : 'Send Code'}</Text>
           </TouchableOpacity>
+          {statusMessage ? (
+            <Text style={[styles.statusText, statusType === 'error' ? styles.errorText : styles.successText]}>
+              {statusMessage}
+            </Text>
+          ) : null}
         </>
       ) : (
         <>
@@ -112,6 +133,11 @@ export default function PhoneAuthScreen({ navigation }: AuthStackScreenProps<'Ph
           <TouchableOpacity style={styles.button} onPress={handleVerifyCode}>
             <Text style={styles.buttonText}>{isLoading ? 'Verifying...' : 'Verify Code'}</Text>
           </TouchableOpacity>
+          {statusMessage ? (
+            <Text style={[styles.statusText, statusType === 'error' ? styles.errorText : styles.successText]}>
+              {statusMessage}
+            </Text>
+          ) : null}
         </>
       )}
     </View>
@@ -155,5 +181,16 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  statusText: {
+    marginTop: 12,
+    textAlign: 'center',
+    fontSize: 14,
+  },
+  errorText: {
+    color: '#C62828',
+  },
+  successText: {
+    color: '#2E7D32',
   },
 });
