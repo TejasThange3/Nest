@@ -23,9 +23,14 @@ export default function PhoneAuthScreen({ navigation }: AuthStackScreenProps<'Ph
   };
 
   const handleCodeChange = (value: string) => {
-    const onlyDigits = value.replace(/\D/g, '').slice(0, 6);
+    const onlyDigits = value.replace(/\D/g, '').slice(0, 4);
     setVerificationCode(onlyDigits);
   };
+  const handleCountryCodeChange = (value: string) => {
+    const digitsOnly = value.replace(/\D/g, '').slice(0, 4);
+    setCountryCode(`+${digitsOnly}`);
+  };
+
 
   const getFormattedPhoneNumber = () => `${countryCode}${phoneNumber.replace(/\D/g, '')}`;
 
@@ -101,7 +106,9 @@ export default function PhoneAuthScreen({ navigation }: AuthStackScreenProps<'Ph
             style={styles.input}
             placeholder="+91"
             value={countryCode}
-            onChangeText={(value) => setCountryCode(value.startsWith('+') ? value : `+${value.replace(/\+/g, '')}`)}
+            onChangeText={handleCountryCodeChange}
+            keyboardType="phone-pad"
+            maxLength={5}
           />
           <TextInput
             style={styles.input}
@@ -128,7 +135,7 @@ export default function PhoneAuthScreen({ navigation }: AuthStackScreenProps<'Ph
             value={verificationCode}
             onChangeText={handleCodeChange}
             keyboardType="number-pad"
-            maxLength={6}
+            maxLength={4}
           />
           <TouchableOpacity style={styles.button} onPress={handleVerifyCode}>
             <Text style={styles.buttonText}>{isLoading ? 'Verifying...' : 'Verify Code'}</Text>

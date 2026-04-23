@@ -2,9 +2,10 @@ import express from 'express';
 import { body, validationResult } from 'express-validator';
 import jwt from 'jsonwebtoken';
 import { User } from '../models/User';
-import { sendSMS, sendEmail } from '../utils';
+import { sendEmail } from '../utils';
 
 const router = express.Router();
+const HARDCODED_PHONE_OTP = '0000';
 
 // Generate verification code
 const generateVerificationCode = (): string => {
@@ -31,7 +32,7 @@ router.post('/send-phone-code', [
     }
 
     const { phoneNumber } = req.body;
-    const verificationCode = generateVerificationCode();
+    const verificationCode = HARDCODED_PHONE_OTP;
     const verificationCodeExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     // Check if user exists
@@ -50,9 +51,6 @@ router.post('/send-phone-code', [
     }
 
     await user.save();
-
-    // Send SMS
-    await sendSMS(phoneNumber, `Your Nest verification code is: ${verificationCode}`);
 
     res.status(200).json({
       success: true,
@@ -73,7 +71,7 @@ router.post('/send-phone-code', [
 // @access  Public
 router.post('/verify-phone', [
   body('phoneNumber').isMobilePhone('any').withMessage('Please provide a valid phone number'),
-  body('code').isLength({ min: 6, max: 6 }).withMessage('Verification code must be 6 digits')
+  body('code').isLength({ min: 4, max: 4 }).withMessage('Verification code must be 4 digits')
 ], async (req: any, res: any) => {
   try {
     const errors = validationResult(req);
