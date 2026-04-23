@@ -6,6 +6,20 @@ import { sendEmail } from '../utils';
 
 const router = express.Router();
 const HARDCODED_PHONE_OTP = '0000';
+const PHONE_OTP_EXPIRES_MS = 10 * 60 * 1000;
+const VERIFIED_PHONE_SESSION_MS = 30 * 60 * 1000;
+const pendingPhoneVerifications = new Map<string, { code: string; expiresAt: number }>();
+const verifiedPhoneSessions = new Map<string, number>();
+
+const clearExpiredPhoneState = () => {
+  const now = Date.now();
+  for (const [phone, entry] of pendingPhoneVerifications.entries()) {
+    if (entry.expiresAt <= now) pendingPhoneVerifications.delete(phone);
+  }
+  for (const [phone, expiresAt] of verifiedPhoneSessions.entries()) {
+    if (expiresAt <= now) verifiedPhoneSessions.delete(phone);
+  }
+};
 
 // Generate verification code
 const generateVerificationCode = (): string => {
@@ -26,31 +40,18 @@ router.post('/send-phone-code', [
   body('phoneNumber').isMobilePhone('any').withMessage('Please provide a valid phone number')
 ], async (req: any, res: any) => {
   try {
+    clearExpiredPhoneState();
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
     const { phoneNumber } = req.body;
-    const verificationCode = HARDCODED_PHONE_OTP;
-    const verificationCodeExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-    // Check if user exists
-    let user = await User.findOne({ phoneNumber });
-    if (!user) {
-      user = new User({
-        phoneNumber,
-        name: `User ${phoneNumber.slice(-4)}`, // Temporary name
-        verificationCode,
-        verificationCodeExpires,
-        isVerified: false
-      });
-    } else {
-      user.verificationCode = verificationCode;
-      user.verificationCodeExpires = verificationCodeExpires;
-    }
-
-    await user.save();
+    pendingPhoneVerifications.set(phoneNumber, {
+      code: HARDCODED_PHONE_OTP,
+      expiresAt: Date.now() + PHONE_OTP_EXPIRES_MS,
+    });
+    verifiedPhoneSessions.delete(phoneNumber);
 
     res.status(200).json({
       success: true,
@@ -74,44 +75,28 @@ router.post('/verify-phone', [
   body('code').isLength({ min: 4, max: 4 }).withMessage('Verification code must be 4 digits')
 ], async (req: any, res: any) => {
   try {
+    clearExpiredPhoneState();
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
     const { phoneNumber, code } = req.body;
+    const pending = pendingPhoneVerifications.get(phoneNumber);
 
-    const user = await User.findOne({
-      phoneNumber,
-      verificationCode: code,
-      verificationCodeExpires: { $gt: Date.now() }
-    });
-
-    if (!user) {
+    if (!pending || pending.expiresAt <= Date.now() || pending.code !== String(code).trim()) {
       return res.status(400).json({
         success: false,
         error: 'Invalid or expired verification code'
       });
     }
 
-    user.isVerified = true;
-    user.verificationCode = undefined;
-    user.verificationCodeExpires = undefined;
-    await user.save();
-
-    const token = generateToken(user._id.toString());
+    pendingPhoneVerifications.delete(phoneNumber);
+    verifiedPhoneSessions.set(phoneNumber, Date.now() + VERIFIED_PHONE_SESSION_MS);
 
     res.status(200).json({
       success: true,
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        phoneNumber: user.phoneNumber,
-        email: user.email,
-        profilePicture: user.profilePicture,
-        isVerified: user.isVerified
-      }
+      message: 'Phone verification successful'
     });
   } catch (error) {
     console.error('Phone verification error:', error);
@@ -234,49 +219,39 @@ router.post('/register', [
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters long')
 ], async (req: any, res: any) => {
   try {
+    clearExpiredPhoneState();
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
     const { phoneNumber, email, username, firstName, lastName, password } = req.body;
-
     const normalizedEmail = String(email).toLowerCase().trim();
-    const allRelatedUsers = await User.find({
-      $or: [
-        { phoneNumber },
-        { email: normalizedEmail }
-      ]
-    });
-
-    // For MVP: require verified phone OTP, email is collected/stored without OTP.
-    const phoneVerified = allRelatedUsers.some(
-      (user) => user.phoneNumber === phoneNumber && user.isVerified
-    );
-
-    if (!phoneVerified) {
+    const phoneVerifiedUntil = verifiedPhoneSessions.get(phoneNumber);
+    if (!phoneVerifiedUntil || phoneVerifiedUntil <= Date.now()) {
       return res.status(400).json({
         success: false,
-        error: 'Phone number must be verified before registration'
+        error: 'Phone number must be verified before registration.'
       });
     }
 
-    const relatedUserIds = allRelatedUsers.map((u) => u._id);
-    const existingEmail = await User.findOne({
-      email: normalizedEmail,
-      _id: { $nin: relatedUserIds }
-    });
+    const existingPhone = await User.findOne({ phoneNumber });
+    if (existingPhone) {
+      return res.status(409).json({
+        success: false,
+        error: 'Phone number is already registered. Please sign in.'
+      });
+    }
+
+    const existingEmail = await User.findOne({ email: normalizedEmail });
     if (existingEmail) {
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
-        error: 'Email already exists'
+        error: 'Email is already registered. Please sign in.'
       });
     }
 
-    const existingUsername = await User.findOne({
-      username,
-      _id: { $nin: relatedUserIds }
-    });
+    const existingUsername = await User.findOne({ username });
     if (existingUsername) {
       return res.status(400).json({
         success: false,
@@ -284,33 +259,20 @@ router.post('/register', [
       });
     }
 
-    const targetUser =
-      allRelatedUsers.find((user) => user.phoneNumber === phoneNumber && user.isVerified) ||
-      allRelatedUsers.find((user) => user.phoneNumber === phoneNumber) ||
-      new User();
-
-    targetUser.phoneNumber = phoneNumber;
-    targetUser.email = normalizedEmail;
-    targetUser.username = username;
-    targetUser.firstName = firstName;
-    targetUser.lastName = lastName;
-    targetUser.name = `${firstName} ${lastName}`;
-    targetUser.password = password;
-    targetUser.isVerified = true;
-    targetUser.verificationCode = undefined;
-    targetUser.verificationCodeExpires = undefined;
-
+    const targetUser = new User({
+      phoneNumber,
+      email: normalizedEmail,
+      username,
+      firstName,
+      lastName,
+      name: `${firstName} ${lastName}`,
+      password,
+      isVerified: true,
+      verificationCode: undefined,
+      verificationCodeExpires: undefined,
+    });
     await targetUser.save();
-
-    // Remove duplicate temporary verification records, preserving finalized account
-    const duplicates = allRelatedUsers.filter(
-      (user) => user._id.toString() !== targetUser._id.toString()
-    );
-    if (duplicates.length > 0) {
-      await User.deleteMany({
-        _id: { $in: duplicates.map((user) => user._id) }
-      });
-    }
+    verifiedPhoneSessions.delete(phoneNumber);
 
     const token = generateToken(targetUser._id.toString());
 

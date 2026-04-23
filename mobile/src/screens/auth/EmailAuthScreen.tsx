@@ -26,8 +26,12 @@ export default function EmailAuthScreen({ route }: AuthStackScreenProps<'Email'>
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [password, setPassword] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(true);
+  const [canSignIn, setCanSignIn] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
+  const isExistingAccountError = (message: string) =>
+    /already registered|already exists|please sign in/i.test(message);
 
   const saveSession = async (payload: AuthApiResponse) => {
     const normalizedUser: User = {
@@ -71,7 +75,14 @@ export default function EmailAuthScreen({ route }: AuthStackScreenProps<'Email'>
       });
       await saveSession(response);
     } catch (error: any) {
-      Alert.alert('Authentication failed', error.message);
+      const errorMessage = String(error?.message || 'Authentication failed');
+      if (isSignUp && isExistingAccountError(errorMessage)) {
+        setCanSignIn(true);
+        setIsSignUp(false);
+        Alert.alert('Account already exists', `${errorMessage}\nPlease sign in.`);
+      } else {
+        Alert.alert('Authentication failed', errorMessage);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -81,7 +92,9 @@ export default function EmailAuthScreen({ route }: AuthStackScreenProps<'Email'>
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>{isSignUp ? 'Create Your Nest' : 'Welcome Back'}</Text>
       <Text style={styles.subtitle}>
-        {isSignUp ? 'Add your details to continue' : 'Sign in to open your chats'}
+        {isSignUp
+          ? 'Sign up is mandatory for new users'
+          : 'Sign in to open your chats'}
       </Text>
       <TextInput
         style={styles.input}
@@ -126,16 +139,18 @@ export default function EmailAuthScreen({ route }: AuthStackScreenProps<'Email'>
           {isLoading ? 'Please wait...' : isSignUp ? 'Create Account' : 'Sign In'}
         </Text>
       </TouchableOpacity>
-      <TouchableOpacity
-        style={styles.switchButton}
-        onPress={() => setIsSignUp(!isSignUp)}
-      >
-        <Text style={styles.switchText}>
-          {isSignUp
-            ? 'Already have an account? Sign in'
-            : "Don't have an account? Sign up"}
-        </Text>
-      </TouchableOpacity>
+      {canSignIn ? (
+        <TouchableOpacity
+          style={styles.switchButton}
+          onPress={() => setIsSignUp(!isSignUp)}
+        >
+          <Text style={styles.switchText}>
+            {isSignUp
+              ? 'Already have an account? Sign in'
+              : 'Need to create another account? Sign up'}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
     </ScrollView>
   );
 }
