@@ -58,9 +58,13 @@ router.post('/send-phone-code', [
       success: true,
       message: 'Verification code sent successfully'
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Phone verification error:', error);
-    res.status(500).json({ success: false, error: 'Failed to send verification code' });
+    const message =
+      typeof error?.message === 'string' && error.message.trim().length > 0
+        ? error.message
+        : 'Failed to send verification code';
+    res.status(500).json({ success: false, error: message });
   }
 });
 
